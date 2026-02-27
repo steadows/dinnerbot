@@ -21,10 +21,10 @@ from user_profile import DEFAULT_PROFILE
 
 # Create a mock profile service that doesn't need Firestore
 class MockProfileService:
-    def get_profile(self, phone_number: str) -> dict:
+    def get_profile(self, user_id: str) -> dict:
         return DEFAULT_PROFILE
     
-    def format_profile_for_prompt(self, phone_number: str) -> str:
+    def format_profile_for_prompt(self, user_id: str) -> str:
         profile = DEFAULT_PROFILE
         parts = [f"Family: {profile['family_size']}"]
         parts.append(f"Portion size: {profile['portion_size']} (enough for leftovers)")

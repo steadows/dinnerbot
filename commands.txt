@@ -1,0 +1,88 @@
+# === Start local servers ===
+GRPC_DNS_RESOLVER=native functions-framework --target=cron_trigger_recipes --port=8080 --debug
+GRPC_DNS_RESOLVER=native functions-framework --target=telegram_webhook --port=8081 --debug
+
+# === Trigger weekly recipes ===
+curl -s http://localhost:8080
+
+# === Plan 6.2 Verify: Photo message (non-text) ===
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":2001,"message":{"message_id":201,"chat":{"id":-5181560657},"photo":[{"file_id":"abc123","width":100,"height":100}],"date":1739123456}}'
+
+# === Plan 6.2 Verify: Sticker message (non-text) ===
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":2002,"message":{"message_id":202,"chat":{"id":-5181560657},"sticker":{"file_id":"stk456","emoji":"😂","width":512,"height":512},"date":1739123456}}'
+
+# === Plan 6.2 Verify: Voice message (non-text) ===
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":2003,"message":{"message_id":203,"chat":{"id":-5181560657},"voice":{"file_id":"voice789","duration":5},"date":1739123456}}'
+
+# === Plan 6.3 Verify: Edited text message ===
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":2004,"edited_message":{"message_id":204,"chat":{"id":-5181560657},"text":"/help","date":1739123456,"edit_date":1739123500}}'
+
+# ======================================================================
+# === Plan 6.8 Verify: Enriched Conversation History                 ===
+# ======================================================================
+# FLOW: Generate → Select → Conversational message
+#   1. Run Step 1 (generate) — copy the session_id from the response
+#   2. Paste session_id into Step 2 (select via button tap)
+#   3. Run Step 3 (conversational) — check server logs for context like
+#      "User: selected <recipe name>" instead of "User: 2"
+#   4. Also test text-based intents to confirm metadata is stored
+
+# --- Step 1: Generate fresh recipes (get a session_id) ---
+curl -s http://localhost:8080
+
+# --- Step 2: Select option 2 via button tap (REPLACE_SESSION_ID with value from Step 1) ---
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":6801,"callback_query":{"id":"cb_68_001","data":"select:REPLACE_SESSION_ID:2","message":{"chat":{"id":-5181560657}}}}'
+
+# --- Step 3: Send conversational message — Gordon should reference the recipe name ---
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":6802,"message":{"message_id":6802,"chat":{"id":-5181560657},"from":{"id":123,"first_name":"Steve"},"text":"how long will that take to cook?","date":1739200000}}'
+
+# --- Step 4: Ask for favorites (verify metadata: intent=favorites) ---
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":6803,"message":{"message_id":6803,"chat":{"id":-5181560657},"from":{"id":123,"first_name":"Steve"},"text":"favorites","date":1739200060}}'
+
+# --- Step 5: Ask for history (verify metadata: intent=history) ---
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":6804,"message":{"message_id":6804,"chat":{"id":-5181560657},"from":{"id":123,"first_name":"Steve"},"text":"what did we have last week","date":1739200120}}'
+
+# --- Step 6: Generate on-demand (verify metadata: intent=generate_now with recipes) ---
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":6805,"message":{"message_id":6805,"chat":{"id":-5181560657},"from":{"id":123,"first_name":"Steve"},"text":"plan dinner","date":1739200180}}'
+
+# --- Step 7: Regenerate (verify metadata: intent=regenerate with recipes) ---
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":6806,"message":{"message_id":6806,"chat":{"id":-5181560657},"from":{"id":123,"first_name":"Steve"},"text":"try again","date":1739200240}}'
+
+# --- Step 8: Final conversational check — context should now be rich ---
+# (Should show: "User: selected X", "User: asked to see their favorites",
+#  "User: asked to see meal history", "User: asked to generate dinner options",
+#  "User: asked for new meal options", etc.)
+curl -s http://localhost:8081 \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: J-zeVGjERVa7o2G150n8JhxhBs9_DwT00UGYnNIYHfY" \
+  -d '{"update_id":6807,"message":{"message_id":6807,"chat":{"id":-5181560657},"from":{"id":123,"first_name":"Steve"},"text":"what do you think we should go with this time?","date":1739200300}}'

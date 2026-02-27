@@ -44,7 +44,7 @@ class UserProfileService:
     def __init__(self):
         self.collection = db.collection(PROFILES_COLLECTION)
 
-    def get_profile(self, phone_number: str) -> dict:
+    def get_profile(self, user_id: str) -> dict:
         """
         Get user profile, merging Firestore overrides with defaults.
         Returns the merged profile.
@@ -54,7 +54,7 @@ class UserProfileService:
         profile["logistics"] = DEFAULT_PROFILE["logistics"].copy()
         
         # Try to get Firestore overrides
-        doc = self.collection.document(phone_number).get()
+        doc = self.collection.document(user_id).get()
         
         if doc.exists:
             firestore_data = doc.to_dict()
@@ -72,21 +72,21 @@ class UserProfileService:
         
         return profile
 
-    def update_profile(self, phone_number: str, updates: dict) -> None:
+    def update_profile(self, user_id: str, updates: dict) -> None:
         """
         Update user profile in Firestore.
         Only updates the fields provided, preserving others.
         """
         updates["updated_at"] = datetime.now(timezone.utc)
-        updates["phone_number"] = phone_number
+        updates["user_id"] = user_id
         
-        self.collection.document(phone_number).set(updates, merge=True)
+        self.collection.document(user_id).set(updates, merge=True)
 
-    def format_profile_for_prompt(self, phone_number: str) -> str:
+    def format_profile_for_prompt(self, user_id: str) -> str:
         """
         Format the user profile as a string for inclusion in LLM prompts.
         """
-        profile = self.get_profile(phone_number)
+        profile = self.get_profile(user_id)
         
         parts = [f"Family: {profile['family_size']}"]
         parts.append(f"Portion size: {profile['portion_size']} (enough for leftovers)")

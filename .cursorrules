@@ -1,0 +1,237 @@
+# DinnerBot — Cursor Rules (GSD Framework)
+
+## Project Identity
+
+You are building **DinnerBot**, a serverless weekly meal planner that generates dinner options using Gemini (with a Gordon Ramsay persona), sends them to the family via Telegram, and replies with a grocery list after selection.
+
+**Always read `blueprint.md` before starting any implementation work.** The blueprint is the single source of truth for architecture, data models, and implementation phases.
+
+---
+
+## GSD Framework Rules
+
+This project uses the **GSD (Get Stuff Done)** spec-driven development framework. Follow these rules strictly.
+
+### Core Workflow: Discuss → Plan → Execute → Verify
+
+Every task must follow this cycle:
+1. **Discuss:** Clarify what the task requires. Reference the relevant Phase and Plan in `blueprint.md`.
+2. **Plan:** Identify the files to create/modify, the functions to write, and the tests to run. Do not write code yet.
+3. **Execute:** Write the code. Keep changes atomic — one plan at a time, no scope creep.
+4. **Verify:** Run tests, check types, confirm expected behavior. Do not mark a plan as done without verification.
+
+### Atomic Plans
+
+- Each plan targets **1-3 specific tasks**. No more.
+- A plan should fit comfortably in a single context window without losing focus.
+- If a task feels too big, split it into smaller plans.
+- Reference plans by their ID: "Phase 1, Plan 1.2" or "Plan 3.1".
+
+### Wave-Based Execution
+
+- Plans within the same Wave can be executed in parallel (they have no dependencies on each other).
+- Plans in a later Wave depend on earlier Waves completing first.
+- Never jump ahead to a later Wave before the current one is verified.
+
+### Progress Tracking (Checklists)
+
+`blueprint.md` uses markdown checklists (`- [ ]` / `- [x]`) for every task. **You MUST update the blueprint as you work:**
+
+1. **Before starting a task:** Confirm the checkbox is unchecked (`- [ ]`).
+2. **After completing a task:** Immediately replace `[ ]` with `[x]` for that line in `blueprint.md`.
+3. **After completing all tasks in a Plan:** Mark the Plan's Verify checkbox as `[x]`.
+4. **After completing all Plans in a Phase:** Mark the Phase checkbox in the Roadmap Overview as `[x]`.
+5. **Never mark a checkbox `[x]` unless the task is genuinely done and verified.**
+6. **If a task fails or is blocked:** Leave it as `[ ]` and add a comment below explaining why.
+
+This makes `blueprint.md` a live progress dashboard. Always check it for current status before starting work.
+
+### Context Hygiene
+
+- Start each new plan with a fresh understanding. Re-read the relevant section of `blueprint.md`.
+- Do not carry assumptions from previous plans — verify the current state of the code.
+- If a file has changed since the blueprint was written, update the blueprint to reflect reality.
+
+---
+
+## Tech Stack & Constraints
+
+### Stack
+- **Language:** Python 3.10+ (type hints encouraged, not required)
+- **Cloud:** Google Cloud Functions (2nd Gen), Firestore, Cloud Scheduler, Secret Manager
+- **LLM:** Google Gemini API via `google-generativeai`
+- **Messaging (Primary):** Telegram Bot API via `python-telegram-bot>=21.0`
+- **Messaging (Extension A):** Twilio SMS via `twilio>=8.0.0` (optional, blocked pending verification)
+- **Web Framework:** Flask + `functions-framework` for Cloud Function entry points
+- **Config:** `python-dotenv` for local dev, Google Secret Manager for production
+
+### LLM Prompt Style
+- All prompts sent to Gemini MUST use the **RISEN framework** with **XML tags** for structure.
+- **RISEN** = Role, Instructions, Steps, End goal, Narrowing.
+- Use XML tags to delimit each section: `<role>`, `<instructions>`, `<steps>`, `<end_goal>`, `<narrowing>`.
+- Use additional XML tags to separate dynamic data from instructions: `<family_profile>`, `<conversation_history>`, `<user_message>`, `<base_ingredients>`, `<pending_meals>`, `<meal_history>`, `<staleness>`, etc.
+- Simpler prompts (e.g. retry/fallback) may omit Steps and Role but must keep `<instructions>` and `<end_goal>`.
+- Never mix instructions and data in the same untagged block — Gemini performs best when these are clearly separated.
+- See `llm_service.py` for reference examples (`CONVERSATIONAL_PROMPT`, `RECIPE_GENERATION_PROMPT`, `GROCERY_LIST_PROMPT`).
+
+### Python Style
+- Use classes for services (`LLMService`, `DBService`, `TelegramService`, `Config`)
+- Instantiate a global singleton at module level: `llm_service = LLMService()`
+- Use `@property` for config values that may come from env or Secret Manager
+- Docstrings on all public methods (one-liner is fine for simple methods)
+- f-strings for string formatting
+- Type hints on function signatures where it adds clarity
+
+### File Organization
+```
+dinnerbot/
+├── .cursorrules          # This file
+├── .env                  # Local secrets (never commit)
+├── .gitignore
+├── blueprint.md          # Project spec (single source of truth)
+├── config.py             # Config/secrets abstraction layer
+├── db_service.py         # Firestore CRUD operations
+├── llm_service.py        # Gemini LLM integration (Gordon Ramsay persona)
+├── telegram_service.py   # Telegram Bot API wrapper (Phase 3)
+├── sms_service.py        # Twilio SMS wrapper (Extension A, optional)
+├── user_profile.py       # Family profile management
+├── main.py               # Cloud Function entry points (Phase 3+)
+├── requirements.txt      # Python dependencies
+└── test_chef.py          # Standalone test suite
+```
+
+### Naming Conventions
+- Files: `snake_case.py`
+- Classes: `PascalCase` (e.g., `TelegramService`, `DBService`)
+- Functions/methods: `snake_case` (e.g., `generate_weekly_recipes`, `send_recipes`)
+- Constants: `UPPER_SNAKE_CASE` (e.g., `SESSIONS_COLLECTION`, `DEFAULT_RECIPES`)
+- Firestore collections: `snake_case` (e.g., `meal_sessions`, `meal_history`)
+
+---
+
+## Architecture Rules
+
+### User ID Abstraction
+The system supports multiple messaging platforms. Use a platform-prefixed `user_id` as the universal identifier:
+- Telegram: `"telegram_{chat_id}"`
+- Twilio: `"twilio_{phone_number}"`
+
+All database operations, profile lookups, and conversation history use `user_id`, not raw platform identifiers.
+
+### Messaging Layer Abstraction
+Each platform has its own service module (`telegram_service.py`, `sms_service.py`). These modules handle:
+- Outbound message formatting (Telegram uses Markdown, SMS uses plain text)
+- Inline keyboards / selection UX (Telegram has buttons, SMS uses text replies)
+- Webhook parsing (different payload formats)
+
+The core logic (`llm_service.py`, `db_service.py`) is platform-agnostic and shared.
+
+### Cloud Function Entry Points
+All Cloud Function entry points live in `main.py`:
+- `cron_trigger_recipes(request)` — triggered by Cloud Scheduler
+- `telegram_webhook(request)` — triggered by Telegram webhook
+- `sms_webhook(request)` — triggered by Twilio webhook (Extension A)
+
+Each entry point is a thin handler that validates the request and delegates to service modules.
+
+### Firestore Schema
+Sessions include a `platform` field and use `user_id` for queries:
+```python
+{
+    "user_id": "telegram_123456789",
+    "chat_id": 123456789,        # Platform-specific, for sending replies
+    "platform": "telegram",       # "telegram" or "twilio"
+    "status": "pending_selection", # pending_selection | completed | expired | send_failed
+    "options": {...},
+    "selected_option": None
+}
+```
+
+---
+
+## Error Handling Patterns
+
+### LLM Responses
+- Always wrap Gemini calls in try/except
+- Retry up to 2 times with progressively simpler prompts
+- Fall back to `DEFAULT_RECIPES` if all retries fail
+- Validate JSON structure before using it
+
+### Telegram Webhook
+- Always return HTTP 200, even on internal errors (Telegram retries on non-200)
+- Validate `X-Telegram-Bot-Api-Secret-Token` header on every request
+- Check `chat_id` against `ALLOWED_CHAT_IDS` allowlist
+- Log errors to Cloud Logging, never expose internal errors to the user
+
+### Twilio Webhook (Extension A)
+- Always return valid TwiML, even on errors
+- Validate request signature using `RequestValidator`
+- Log errors, return friendly error message in TwiML
+
+### User-Facing Messages
+All error messages should be in-character (Gordon Ramsay persona), brief, and actionable:
+- Guide the user toward a valid action
+- Never expose technical details, stack traces, or internal state
+
+---
+
+## Security Rules
+
+1. **Never commit secrets.** `.env` is in `.gitignore`. Production uses Secret Manager.
+2. **Validate every webhook request.** Telegram: check secret token header. Twilio: validate request signature.
+3. **Restrict access.** Only respond to chat IDs / phone numbers in the allowlist.
+4. **Sanitize LLM output.** Never pass raw LLM output to Telegram's `parse_mode` without escaping special characters.
+5. **No hardcoded secrets.** All credentials flow through `config.py`.
+
+---
+
+## Persona Context (for LLM Prompts)
+
+The bot uses a **Gordon Ramsay** persona. When writing or modifying LLM prompts:
+- Passionate but adapted for home cooks
+- Direct, confident, no-nonsense
+- Warm when it comes to feeding families and kids
+- Brief and punchy (messages go via chat, not essays)
+- Occasional Gordon-isms: "Right", "Beautiful", "Lovely", "Let's go"
+
+### Family Profile (Defaults)
+- 2 adults + 1 toddler (2 years old)
+- High protein focus
+- No wheat/bread, no mushrooms, no olives, no seed oils
+- Rice, couscous, grain-free tortillas are fine
+- Hidden vegetables for the toddler
+- Equipment: slow cooker, air fryer, oven, stovetop
+- Under 45 minutes or slow cooker set-and-forget
+- Large portions (leftovers for lunch)
+
+---
+
+## Verification Checklist
+
+Before marking any plan as complete, confirm:
+
+- [ ] Code follows the patterns in existing modules (class-based services, global singletons)
+- [ ] New functions have docstrings
+- [ ] Error handling follows the patterns above (try/except, fallbacks, friendly errors)
+- [ ] No secrets are hardcoded
+- [ ] Firestore operations use `user_id`, not raw platform IDs
+- [ ] `blueprint.md` is updated if the implementation deviated from the spec
+- [ ] Tests pass (run `test_chef.py` for LLM logic, manual test for Telegram/SMS)
+
+---
+
+## Quick Reference: Current Phase Status
+
+Check `blueprint.md` Section 3 for the latest status.
+
+| Phase | Status | Key Files |
+|-------|--------|-----------|
+| Phase 1: Foundation | COMPLETE | config.py, requirements.txt |
+| Phase 2: Recipe Engine | COMPLETE | llm_service.py, user_profile.py, db_service.py, test_chef.py |
+| Phase 3: Telegram Outbound | COMPLETE | telegram_service.py, main.py |
+| Phase 4: Webhook Handler | COMPLETE | main.py |
+| Phase 5: Grocery List | COMPLETE | main.py (wiring only) |
+| Phase 6: Conversational Intelligence | COMPLETE | main.py, llm_service.py, db_service.py |
+| Phase 7: Deployment | IN PROGRESS | gcloud commands (7.1-7.2 done, 7.3 pending) |
+| Phase 8: CI/CD | NOT STARTED | cloudbuild.yaml (future) |
+| Extension A: Twilio SMS | BLOCKED | sms_service.py (future) |

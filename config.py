@@ -5,6 +5,10 @@ from google.cloud import secretmanager
 # Load environment variables from .env file for local development
 load_dotenv()
 
+# Fix gRPC DNS resolution on macOS — must be set before any gRPC client initializes
+if os.getenv("GRPC_DNS_RESOLVER"):
+    os.environ["GRPC_DNS_RESOLVER"] = os.getenv("GRPC_DNS_RESOLVER")
+
 # Sentinel to distinguish "not yet initialized" from "initialization failed"
 _NOT_INITIALIZED = object()
 
@@ -54,6 +58,42 @@ class Config:
     @property
     def GEMINI_API_KEY(self):
         return self.get_value("GEMINI_API_KEY", is_secret=True)
+
+    # ==================== TELEGRAM ====================
+
+    @property
+    def TELEGRAM_BOT_TOKEN(self):
+        """Telegram Bot API token from @BotFather."""
+        return self.get_value("TELEGRAM_BOT_TOKEN", is_secret=True)
+
+    @property
+    def TELEGRAM_CHAT_ID(self):
+        """Telegram chat ID for the family chat."""
+        return self.get_value("TELEGRAM_CHAT_ID", is_secret=False)
+
+    @property
+    def TELEGRAM_WEBHOOK_SECRET(self):
+        """Secret token for validating Telegram webhook requests."""
+        return self.get_value("TELEGRAM_WEBHOOK_SECRET", is_secret=True)
+
+    @property
+    def ALLOWED_CHAT_IDS(self) -> list:
+        """
+        List of authorized Telegram chat IDs.
+        Reads from ALLOWED_CHAT_IDS env var (comma-separated) or falls back to TELEGRAM_CHAT_ID.
+        """
+        raw = self.get_value("ALLOWED_CHAT_IDS", is_secret=False)
+        if raw:
+            return [int(cid.strip()) for cid in raw.split(",") if cid.strip()]
+
+        # Fall back to the single configured chat ID
+        single = self.TELEGRAM_CHAT_ID
+        if single:
+            return [int(single)]
+
+        return []
+
+    # ==================== TWILIO (Extension A) ====================
 
     @property
     def TWILIO_ACCOUNT_SID(self):

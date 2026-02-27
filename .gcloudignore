@@ -1,0 +1,45 @@
+# Git & version control
+.git/
+.gitignore
+
+# Environment & secrets (never deploy these)
+.env
+.env.*
+
+# Development & IDE files
+.cursorrules
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Project docs (not needed at runtime)
+blueprint.md
+commands.txt
+README.md
+
+# Tests (not needed in production)
+test_chef.py
+test_*.py
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Google Cloud credentials (local only)
+key.json
+*.key.json
+gcp-key.json
+google-credentials.json

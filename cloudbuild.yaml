@@ -1,0 +1,45 @@
+# cloudbuild.yaml — DinnerBot CI/CD
+# Deploys both Cloud Functions in parallel on push to main.
+
+steps:
+  # Deploy trigger function (cron-triggered, no public access)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-trigger'
+    entrypoint: 'gcloud'
+    args:
+      - 'functions'
+      - 'deploy'
+      - 'trigger-weekly-meals'
+      - '--gen2'
+      - '--runtime=python310'
+      - '--trigger-http'
+      - '--no-allow-unauthenticated'
+      - '--entry-point=cron_trigger_recipes'
+      - '--set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest'
+      - '--set-env-vars=TELEGRAM_CHAT_ID=-5181560657'
+      - '--region=us-central1'
+      - '--memory=512MB'
+      - '--timeout=120s'
+    waitFor: ['-']
+
+  # Deploy webhook function (Telegram webhook, public access required)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-webhook'
+    entrypoint: 'gcloud'
+    args:
+      - 'functions'
+      - 'deploy'
+      - 'handle-telegram-update'
+      - '--gen2'
+      - '--runtime=python310'
+      - '--trigger-http'
+      - '--allow-unauthenticated'
+      - '--entry-point=telegram_webhook'
+      - '--set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,TELEGRAM_WEBHOOK_SECRET=TELEGRAM_WEBHOOK_SECRET:latest'
+      - '--set-env-vars=TELEGRAM_CHAT_ID=-5181560657'
+      - '--region=us-central1'
+      - '--memory=512MB'
+      - '--timeout=120s'
+    waitFor: ['-']
+
+timeout: '600s'
