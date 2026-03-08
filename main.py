@@ -1005,16 +1005,29 @@ def _handle_recipe_detail(chat_id: int, user_id: str, text: str):
         return
 
     # 2. Extract which option the user is asking about
-    option = llm_service.extract_detail_option(text)
-    if not option:
-        msg = "Which option do you want details on — 1, 2, or 3?"
-        db_service.append_to_conversation(user_id, "assistant", msg, metadata=detail_meta)
-        telegram_service.send_message(chat_id, msg)
-        return
-
-    # 3. Validate the option exists in the session
     data = session.to_dict()
     options = data.get("options", {})
+    option = llm_service.extract_detail_option(text)
+
+    if not option:
+        # No number specified — check if a single meal was already selected
+        selected = data.get("selected_option")
+        if selected and selected != "all" and selected in options:
+            option = selected
+        elif selected == "all":
+            # Selected all 3 — ask which one they want details for
+            names = [f"{k}. {options[k].get('name', '?')}" for k in ["1", "2", "3"] if k in options]
+            msg = f"You picked all 3, love! Which one do you want the full recipe for?\n" + "\n".join(names)
+            db_service.append_to_conversation(user_id, "assistant", msg, metadata=detail_meta)
+            telegram_service.send_message(chat_id, msg)
+            return
+        else:
+            msg = "Which option do you want details on — 1, 2, or 3?"
+            db_service.append_to_conversation(user_id, "assistant", msg, metadata=detail_meta)
+            telegram_service.send_message(chat_id, msg)
+            return
+
+    # 3. Validate the option exists in the session
     if option not in options:
         msg = f"Option {option} doesn't exist on this menu. Pick 1, 2, or 3."
         db_service.append_to_conversation(user_id, "assistant", msg, metadata=detail_meta)

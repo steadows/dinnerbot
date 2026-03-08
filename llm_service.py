@@ -643,6 +643,7 @@ class LLMService:
         
         # Check for recipe detail request ("tell me more about option 2", "what's in 1", etc.)
         recipe_detail_patterns = [
+            # With option number
             r"tell\s*(?:me\s*)?(?:more\s*)?(?:about|on)\s*(?:option\s*)?[123]",
             r"(?:more\s*)?(?:about|on)\s*(?:option\s*)?[123]",
             r"what(?:'s|s| is)\s*in\s*(?:option\s*|number\s*|#\s*)?[123]",
@@ -652,7 +653,14 @@ class LLMService:
             r"explain\s*(?:option\s*|number\s*|#\s*)?[123]",
             r"what\s*(?:does|do)\s*(?:option\s*|number\s*)?[123]\s*(?:include|have|contain)",
             r"recipe\s*(?:details?|info)\s*(?:for\s*)?(?:option\s*|number\s*|#\s*)?[123]",
-            r"how\s*(?:do\s*(?:i|you)\s*)?(?:make|cook|prepare)\s*(?:option\s*|number\s*|#\s*)?[123]",
+            r"how\s*(?:do\s*(?:i|you)\s*|to\s*)?(?:make|cook|prepare)\s*(?:option\s*|number\s*|#\s*)?[123]",
+            # Without option number — for after meal selection
+            r"how\s*(?:do\s*(?:i|you)\s*|to\s*)?(?:make|cook|prepare)\s*(?:it|this|that|the meal|dinner|the dish)",
+            r"(?:give|send|show)\s*(?:me\s*)?(?:the\s*)?(?:full\s*)?(?:recipe|instructions|directions|steps)",
+            r"(?:what\s*are\s*)?(?:the\s*)?(?:cooking\s*)?(?:steps|instructions|directions)",
+            r"(?:tell|show)\s*me\s*how\s*to\s*(?:make|cook|prepare)\s*(?:it|this|that)",
+            r"how\s*(?:do\s*(?:i|we)\s*|to\s*|should\s*(?:i|we)\s*)?cook\s*(?:it|this|that|tonight)",
+            r"recipe\s*(?:details?|instructions?|steps|directions)",
         ]
         if any(re.search(pat, message_lower) for pat in recipe_detail_patterns):
             return "recipe_detail"
