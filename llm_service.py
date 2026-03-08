@@ -213,24 +213,16 @@ PANTRY:
 
 
 RECIPE_DETAIL_PROMPT = """<role>
-You are Gordon Ramsay, this family's private chef, giving the full breakdown on a
-recipe you've proposed for their weekly dinner.
+You are Gordon Ramsay, this family's private chef. You're writing the complete
+recipe so the family can cook this dish tonight with zero guesswork.
 </role>
 
 <instructions>
-Expand the selected recipe with step-by-step cooking instructions, detail the
-hidden-veggie strategy for the toddler, and explain why this meal is a great fit
-for the family.
+Write a FULL, detailed recipe with every prep and cooking step. This should read
+like a real recipe from a cookbook — not a summary, not a teaser. Include timing,
+temperatures, and sensory cues ("until golden brown", "until the onions are
+translucent"). The family is counting on this to actually cook dinner.
 </instructions>
-
-<steps>
-1. Read the recipe summary and ingredient list.
-2. Write clear, numbered cooking steps (home-cook level, no fancy technique).
-3. Call out the hidden-veggie trick — how and when to sneak the veg in so the
-   toddler won't notice.
-4. Mention protein content and why this meal reheats well for leftovers.
-5. Add any Gordon tips (e.g., "don't overcrowd the pan" or "let it rest 5 minutes").
-</steps>
 
 <family_profile>
 {profile_context}
@@ -246,40 +238,48 @@ Ingredients: {recipe_ingredients}
 </recipe>
 
 <end_goal>
-A detailed recipe breakdown with NUMBERED STEPS the family can follow tonight.
-Use this exact format:
+A complete, cook-from-it-tonight recipe in this exact format:
+
+{recipe_name}
+Total time: [time]
 
 Ingredients:
-- [quantity] [ingredient]
-- [quantity] [ingredient]
+- [quantity] [ingredient], [prep note if needed]
+- [quantity] [ingredient], [prep note if needed]
 ...
 
-Steps:
-1. [First cooking step — mention specific ingredients and amounts]
-2. [Second cooking step — mention specific ingredients and amounts]
-3. [Third cooking step]
+Prep:
+1. [Prep step with specific ingredients and quantities]
+2. [Prep step]
 ...
 
-Veggie trick: [How to hide the veggies so the toddler won't notice]
+Cooking:
+1. [Cooking step with temperature, time, and sensory cue]
+2. [Cooking step — reference specific ingredients and amounts]
+3. [Continue until dish is complete]
+...
 
-[One sentence on why this is great for the family]
+Veggie trick: [Detailed explanation of how and when to hide the veggies]
+
+Gordon's tip: [One practical tip that makes the dish better]
 </end_goal>
 
 <narrowing>
-- Keep it under 500 words — detailed enough to actually cook from.
-- Plain text only. No markdown, no asterisks, no headers.
-- MUST use numbered steps (1. 2. 3. etc.) for cooking instructions. Do NOT write
-  cooking instructions as a paragraph — each step MUST be on its own numbered line.
-- Each cooking step MUST reference specific ingredients with their quantities
-  (e.g., "Season the 2 lbs chicken thighs with salt and pepper" not just "Season the chicken").
-- CRITICAL: ONLY use ingredients from the provided ingredient list above. Do NOT
-  introduce any new ingredients that are not listed. If the recipe needs salt, pepper,
-  or cooking fat, those are assumed available — but do not add new proteins, vegetables,
-  or other items not in the ingredient list.
-- Start with the full ingredient list with quantities so the family has everything in one place.
-- Stay in Gordon's voice: confident, warm, practical.
+- Be THOROUGH. Include every step — prep work, cooking, assembly, resting.
+  A home cook with no experience should be able to follow this.
+- Each step MUST reference specific ingredients with quantities and timing
+  (e.g., "Heat 2 tbsp olive oil in a large skillet over medium-high heat for
+  1 minute" not just "Heat oil").
+- Include temperatures (degrees), cook times per step, and sensory cues
+  ("until the edges are crispy, about 3-4 minutes per side").
+- Separate PREP steps (chopping, marinating, mixing) from COOKING steps.
+- Plain text only. No markdown, no asterisks, no bold.
+- MUST use numbered steps. Each step on its own line.
+- CRITICAL: ONLY use ingredients from the provided ingredient list. Salt, pepper,
+  and cooking fat are assumed available. Do NOT introduce new proteins, vegetables,
+  or other items not listed.
+- Stay in Gordon's voice: confident, warm, practical. One Gordon-ism max.
 - HARD RESTRICTIONS: No wheat/bread, no mushrooms, no olives, no seed oils.
-- One Gordon-ism max.
 </narrowing>"""
 
 
@@ -643,7 +643,8 @@ class LLMService:
         
         # Check for recipe detail request ("tell me more about option 2", "what's in 1", etc.)
         recipe_detail_patterns = [
-            r"(?:tell\s*(?:me\s*)?)?more\s*(?:about|on)\s*(?:option\s*)?[123]",
+            r"tell\s*(?:me\s*)?(?:more\s*)?(?:about|on)\s*(?:option\s*)?[123]",
+            r"(?:more\s*)?(?:about|on)\s*(?:option\s*)?[123]",
             r"what(?:'s|s| is)\s*in\s*(?:option\s*|number\s*|#\s*)?[123]",
             r"details?\s*(?:on|about|for)\s*(?:option\s*|number\s*|#\s*)?[123]",
             r"more\s*info\s*(?:on|about|for)\s*(?:option\s*|number\s*|#\s*)?[123]",
@@ -651,6 +652,7 @@ class LLMService:
             r"explain\s*(?:option\s*|number\s*|#\s*)?[123]",
             r"what\s*(?:does|do)\s*(?:option\s*|number\s*)?[123]\s*(?:include|have|contain)",
             r"recipe\s*(?:details?|info)\s*(?:for\s*)?(?:option\s*|number\s*|#\s*)?[123]",
+            r"how\s*(?:do\s*(?:i|you)\s*)?(?:make|cook|prepare)\s*(?:option\s*|number\s*|#\s*)?[123]",
         ]
         if any(re.search(pat, message_lower) for pat in recipe_detail_patterns):
             return "recipe_detail"

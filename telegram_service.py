@@ -69,12 +69,44 @@ class TelegramService:
             print(f"Error sending recipes to chat {chat_id}: {e}")
             return False
 
+    def _split_message(self, text: str, max_len: int = 4096) -> list[str]:
+        """Split a long message into chunks that fit Telegram's 4096-char limit.
+
+        Splits on double-newlines first, then single newlines, to keep
+        logical sections together.
+        """
+        if len(text) <= max_len:
+            return [text]
+
+        chunks: list[str] = []
+        remaining = text
+
+        while remaining:
+            if len(remaining) <= max_len:
+                chunks.append(remaining)
+                break
+
+            # Try to split at a double newline within the limit
+            split_at = remaining.rfind("\n\n", 0, max_len)
+            if split_at == -1:
+                # Fall back to single newline
+                split_at = remaining.rfind("\n", 0, max_len)
+            if split_at == -1:
+                # Last resort: hard cut at max_len
+                split_at = max_len
+
+            chunks.append(remaining[:split_at].rstrip())
+            remaining = remaining[split_at:].lstrip("\n")
+
+        return chunks
+
     def send_message(self, chat_id: int, text: str) -> bool:
-        """Send a plain text message. Returns True on success."""
+        """Send a plain text message, splitting into chunks if over 4096 chars."""
         try:
-            self._run_async(
-                self._bot.send_message(chat_id=chat_id, text=text)
-            )
+            for chunk in self._split_message(text):
+                self._run_async(
+                    self._bot.send_message(chat_id=chat_id, text=chunk)
+                )
             return True
         except Exception as e:
             print(f"Error sending message to chat {chat_id}: {e}")

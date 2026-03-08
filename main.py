@@ -991,8 +991,13 @@ def _handle_recipe_detail(chat_id: int, user_id: str, text: str):
     detail_meta = {"intent": "recipe_detail"}
     db_service.append_to_conversation(user_id, "user", text, metadata=detail_meta)
 
-    # 1. Look up the user's pending session
+    # 1. Look up the user's pending session, or most recent completed session
     session = db_service.get_pending_session(user_id)
+    if not session:
+        try:
+            session = db_service.get_most_recent_completed_session(user_id)
+        except Exception as e:
+            print(f"WARNING: Failed to get completed session for recipe detail: {e}")
     if not session:
         msg = "No menu to look at right now, love. Say 'plan dinner' to get new options."
         db_service.append_to_conversation(user_id, "assistant", msg, metadata=detail_meta)
