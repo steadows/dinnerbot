@@ -40,7 +40,6 @@ steps:
       - '--region=us-central1'
       - '--memory=512MB'
       - '--timeout=300s'
-      - '--no-cpu-throttling'
       - '--concurrency=1'
     waitFor: ['-']
 
