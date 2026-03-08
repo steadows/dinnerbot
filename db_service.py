@@ -112,6 +112,44 @@ class DBService:
             "error_message": error_message
         })
 
+    def get_most_recent_completed_session(self, user_id: str):
+        """Retrieve the most recently completed session for a user.
+
+        Returns the document snapshot or None if no completed sessions exist.
+        Used by _handle_grocery_list to find cached grocery lists and detect
+        multi-meal selections.
+        """
+        sessions = (
+            self.sessions
+            .where(filter=firestore.FieldFilter("user_id", "==", user_id))
+            .where(filter=firestore.FieldFilter("status", "==", "completed"))
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .limit(1)
+            .stream()
+        )
+
+        for doc in sessions:
+            return doc
+
+        return None
+
+    def cache_grocery_list(self, session_id: str, grocery_text: str) -> None:
+        """Cache the generated grocery list text on the session document.
+
+        Stored so subsequent 'send me the shopping list' requests
+        can serve from cache without re-calling Gemini.
+        """
+        self.sessions.document(session_id).update({
+            "cached_grocery_list": grocery_text,
+        })
+
+    def get_cached_grocery_list(self, session_id: str) -> str | None:
+        """Retrieve the cached grocery list from a session, if any."""
+        doc = self.sessions.document(session_id).get()
+        if doc.exists:
+            return doc.to_dict().get("cached_grocery_list")
+        return None
+
     def update_session_options(self, doc_id: str, updated_options: dict) -> None:
         """
         Update specific option(s) in a session's options dict.

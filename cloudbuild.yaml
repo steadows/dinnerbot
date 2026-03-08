@@ -19,7 +19,7 @@ steps:
       - '--set-env-vars=TELEGRAM_CHAT_ID=-5181560657'
       - '--region=us-central1'
       - '--memory=512MB'
-      - '--timeout=120s'
+      - '--timeout=300s'
     waitFor: ['-']
 
   # Deploy webhook function (Telegram webhook, public access required)
@@ -39,7 +39,9 @@ steps:
       - '--set-env-vars=TELEGRAM_CHAT_ID=-5181560657'
       - '--region=us-central1'
       - '--memory=512MB'
-      - '--timeout=120s'
+      - '--timeout=300s'
+      - '--no-cpu-throttling'
+      - '--concurrency=1'
     waitFor: ['-']
 
 timeout: '600s'

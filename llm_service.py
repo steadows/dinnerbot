@@ -1,10 +1,13 @@
 import json
 import re
 from datetime import datetime, timezone
+
 import google.generativeai as genai
+
 from config import config
-from user_profile import profile_service
 from db_service import db_service
+from gemini_client import call_gemini
+from user_profile import profile_service
 
 # Configure the Gemini client
 genai.configure(api_key=config.GEMINI_API_KEY)
@@ -126,9 +129,9 @@ must be a real, practical weeknight meal — not aspirational restaurant food.
 <end_goal>
 Return ONLY valid JSON (no markdown, no code fences, no commentary) in this exact schema:
 {{
-    "1": {{"name": "Recipe Name", "description": "Gordon's pitch including the hidden veggie trick", "protein": "main protein", "cook_method": "method", "time": "XX mins", "ingredients": ["ingredient1", "ingredient2"]}},
-    "2": {{"name": "Recipe Name", "description": "Gordon's pitch including the hidden veggie trick", "protein": "main protein", "cook_method": "method", "time": "XX mins", "ingredients": ["ingredient1", "ingredient2"]}},
-    "3": {{"name": "Recipe Name", "description": "Gordon's pitch including the hidden veggie trick", "protein": "main protein", "cook_method": "method", "time": "XX mins", "ingredients": ["ingredient1", "ingredient2"]}}
+    "1": {{"name": "Recipe Name", "description": "Gordon's pitch including the hidden veggie trick", "protein": "main protein", "cook_method": "method", "time": "XX mins", "ingredients": ["2 lbs chicken thighs", "3 carrots, diced", "1 head garlic"]}},
+    "2": {{"name": "Recipe Name", "description": "Gordon's pitch including the hidden veggie trick", "protein": "main protein", "cook_method": "method", "time": "XX mins", "ingredients": ["1.5 lbs ground beef", "2 zucchini, grated", "1 can crushed tomatoes"]}},
+    "3": {{"name": "Recipe Name", "description": "Gordon's pitch including the hidden veggie trick", "protein": "main protein", "cook_method": "method", "time": "XX mins", "ingredients": ["1 lb salmon fillets", "1 lb sweet potatoes", "2 cups broccoli florets"]}}
 }}
 </end_goal>
 
@@ -143,7 +146,9 @@ Return ONLY valid JSON (no markdown, no code fences, no commentary) in this exac
 - Hidden veggies: finely diced into sauce, grated into meatballs, pureed into
   existing sauces — methods the toddler won't notice.
 - Descriptions should be 1-2 sentences in Gordon's voice, mentioning the veggie trick.
-- Ingredients list should be complete enough to shop from.
+- IMPORTANT: Ingredients MUST include quantities and prep notes (e.g., "2 lbs chicken thighs",
+  "3 carrots, diced", "1 can (14 oz) crushed tomatoes"). Do NOT list bare ingredient names.
+- Ingredients list should be complete enough to shop from — include everything needed.
 </narrowing>"""
 
 RETRY_PROMPT = """<instructions>
@@ -156,9 +161,9 @@ under 45 minutes, hidden veggies for toddler, simple weeknight prep.
 
 Schema:
 {{
-    "1": {{"name": "Name", "description": "brief desc", "protein": "protein", "cook_method": "method", "time": "XX mins", "ingredients": ["item1", "item2"]}},
-    "2": {{"name": "Name", "description": "brief desc", "protein": "protein", "cook_method": "method", "time": "XX mins", "ingredients": ["item1", "item2"]}},
-    "3": {{"name": "Name", "description": "brief desc", "protein": "protein", "cook_method": "method", "time": "XX mins", "ingredients": ["item1", "item2"]}}
+    "1": {{"name": "Name", "description": "brief desc", "protein": "protein", "cook_method": "method", "time": "XX mins", "ingredients": ["2 lbs chicken thighs", "3 carrots, diced"]}},
+    "2": {{"name": "Name", "description": "brief desc", "protein": "protein", "cook_method": "method", "time": "XX mins", "ingredients": ["1.5 lbs ground beef", "2 zucchini, grated"]}},
+    "3": {{"name": "Name", "description": "brief desc", "protein": "protein", "cook_method": "method", "time": "XX mins", "ingredients": ["1 lb salmon fillets", "1 lb sweet potatoes"]}}
 }}
 </end_goal>"""
 
@@ -244,8 +249,14 @@ Ingredients: {recipe_ingredients}
 A detailed recipe breakdown with NUMBERED STEPS the family can follow tonight.
 Use this exact format:
 
-1. [First cooking step]
-2. [Second cooking step]
+Ingredients:
+- [quantity] [ingredient]
+- [quantity] [ingredient]
+...
+
+Steps:
+1. [First cooking step — mention specific ingredients and amounts]
+2. [Second cooking step — mention specific ingredients and amounts]
 3. [Third cooking step]
 ...
 
@@ -255,13 +266,19 @@ Veggie trick: [How to hide the veggies so the toddler won't notice]
 </end_goal>
 
 <narrowing>
-- Keep it under 300 words — this is a Telegram message, not a cookbook chapter.
+- Keep it under 500 words — detailed enough to actually cook from.
 - Plain text only. No markdown, no asterisks, no headers.
 - MUST use numbered steps (1. 2. 3. etc.) for cooking instructions. Do NOT write
   cooking instructions as a paragraph — each step MUST be on its own numbered line.
+- Each cooking step MUST reference specific ingredients with their quantities
+  (e.g., "Season the 2 lbs chicken thighs with salt and pepper" not just "Season the chicken").
+- CRITICAL: ONLY use ingredients from the provided ingredient list above. Do NOT
+  introduce any new ingredients that are not listed. If the recipe needs salt, pepper,
+  or cooking fat, those are assumed available — but do not add new proteins, vegetables,
+  or other items not in the ingredient list.
+- Start with the full ingredient list with quantities so the family has everything in one place.
 - Stay in Gordon's voice: confident, warm, practical.
 - HARD RESTRICTIONS: No wheat/bread, no mushrooms, no olives, no seed oils.
-- Don't repeat the full ingredient list — the family already has it.
 - One Gordon-ism max.
 </narrowing>"""
 
@@ -832,27 +849,26 @@ class LLMService:
         prompts = [prompt, RETRY_PROMPT]
         
         for attempt, p in enumerate(prompts):
+            result = call_gemini(self.model, p, timeout=60)
+
+            if not result.success:
+                print(f"Attempt {attempt + 1}: Gemini failed — {result.error}")
+                continue
+
+            if not result.text:
+                print(f"Attempt {attempt + 1}: Empty response from Gemini")
+                continue
+
             try:
-                print(f"Attempt {attempt + 1}: Calling Gemini API...")
-                response = self.model.generate_content(p)
-                print(f"Attempt {attempt + 1}: Gemini responded")
-                
-                if not response.text:
-                    print(f"Attempt {attempt + 1}: Empty response from Gemini")
-                    continue
-                
-                data = self._parse_json_response(response.text)
-                
+                data = self._parse_json_response(result.text)
+
                 if self._validate_recipe_structure(data):
                     return data
                 else:
                     print(f"Attempt {attempt + 1}: Invalid recipe structure")
-                    
             except json.JSONDecodeError as e:
                 print(f"Attempt {attempt + 1}: JSON parsing failed - {e}")
-            except Exception as e:
-                print(f"Attempt {attempt + 1}: Error calling Gemini - {e}")
-        
+
         print("All retries exhausted, using fallback recipes")
         return DEFAULT_RECIPES
 
@@ -863,12 +879,13 @@ class LLMService:
             ingredients=", ".join(ingredients),
         )
 
-        try:
-            response = self.model.generate_content(prompt)
-            if response.text:
-                return f"Right, here's your list for {recipe_name}:\n\n{response.text.strip()}"
-        except Exception as e:
-            print(f"Error generating grocery list: {e}")
+        result = call_gemini(self.model, prompt)
+
+        if result.success and result.text:
+            return f"Right, here's your list for {recipe_name}:\n\n{result.text.strip()}"
+
+        if result.error:
+            print(f"Error generating grocery list: {result.error}")
 
         return f"Shopping list for {recipe_name}:\n" + "\n".join(f"- {item}" for item in ingredients)
 
@@ -884,14 +901,15 @@ class LLMService:
 
         prompt = COMBINED_GROCERY_LIST_PROMPT.format(recipes_detail=recipes_detail)
 
-        try:
-            response = self.model.generate_content(prompt)
-            if response.text:
-                names = [r["name"] for r in recipes]
-                header = "Right, here's your mega shopping list for " + ", ".join(names[:-1]) + f", and {names[-1]}:"
-                return f"{header}\n\n{response.text.strip()}"
-        except Exception as e:
-            print(f"Error generating combined grocery list: {e}")
+        result = call_gemini(self.model, prompt, timeout=60)
+
+        if result.success and result.text:
+            names = [r["name"] for r in recipes]
+            header = "Right, here's your mega shopping list for " + ", ".join(names[:-1]) + f", and {names[-1]}:"
+            return f"{header}\n\n{result.text.strip()}"
+
+        if result.error:
+            print(f"Error generating combined grocery list: {result.error}")
 
         # Fallback: concatenate individual ingredient lists
         all_items = []
@@ -939,22 +957,28 @@ class LLMService:
             json_schema=json_schema,
         )
 
-        try:
-            response = self.model.generate_content(prompt)
-            if response.text:
-                data = self._parse_json_response(response.text)
-                for pos in positions_to_replace:
-                    if pos not in data:
-                        print(f"Partial regen: missing position {pos} in response")
-                        return None
-                    if "name" not in data[pos] or "ingredients" not in data[pos]:
-                        print(f"Partial regen: invalid structure for position {pos}")
-                        return None
-                return data
-        except Exception as e:
-            print(f"Error in partial regeneration: {e}")
+        result = call_gemini(self.model, prompt, timeout=60)
 
-        return None
+        if not result.success:
+            print(f"Error in partial regeneration: {result.error}")
+            return None
+
+        if not result.text:
+            return None
+
+        try:
+            data = self._parse_json_response(result.text)
+            for pos in positions_to_replace:
+                if pos not in data:
+                    print(f"Partial regen: missing position {pos} in response")
+                    return None
+                if "name" not in data[pos] or "ingredients" not in data[pos]:
+                    print(f"Partial regen: invalid structure for position {pos}")
+                    return None
+            return data
+        except Exception as e:
+            print(f"Error parsing partial regeneration: {e}")
+            return None
 
     def generate_recipe_detail(self, user_id: str, recipe: dict) -> str:
         """Generate an expanded recipe breakdown with cooking steps and veggie-hiding detail."""
@@ -970,12 +994,13 @@ class LLMService:
             recipe_ingredients=", ".join(recipe.get("ingredients", [])),
         )
 
-        try:
-            response = self.model.generate_content(prompt)
-            if response.text:
-                return response.text.strip()
-        except Exception as e:
-            print(f"Error generating recipe detail: {e}")
+        result = call_gemini(self.model, prompt)
+
+        if result.success and result.text:
+            return result.text.strip()
+
+        if result.error:
+            print(f"Error generating recipe detail: {result.error}")
 
         # Fallback: return a simple summary from the stored data
         name = recipe.get("name", "this dish")
@@ -1175,12 +1200,13 @@ Every week I'll send you 3 proper dinner options. Pick one (or all!), and I'll s
             message=message,
         )
 
-        try:
-            response = self.model.generate_content(prompt)
-            if response.text:
-                return response.text.strip()
-        except Exception as e:
-            print(f"Error in conversational response: {e}")
+        result = call_gemini(self.model, prompt)
+
+        if result.success and result.text:
+            return result.text.strip()
+
+        if result.error:
+            print(f"Error in conversational response: {result.error}")
 
         return "Apologies, I'm having a moment. Reply 'help' for options, or pick 1, 2, or 3 if you have a menu waiting!"
 

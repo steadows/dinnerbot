@@ -3,11 +3,14 @@ Cloud Function entry points for DinnerBot.
 All HTTP handlers live here — thin wrappers that delegate to service modules.
 """
 
+import threading
+
 import functions_framework
 from flask import jsonify
 
 from config import config
 from db_service import db_service
+from dedup_service import dedup_service
 from llm_service import llm_service
 from telegram_service import telegram_service
 
@@ -111,6 +114,17 @@ def telegram_webhook(request):
     if not update:
         print("WARNING: Empty update body")
         return jsonify({"status": "ok"}), 200
+
+    # 2b. Deduplicate — drop if we've already processed this update_id
+    update_id = update.get("update_id")
+    if update_id:
+        try:
+            if dedup_service.is_duplicate(update_id):
+                print(f"DEDUP: Skipping duplicate update_id={update_id}")
+                return jsonify({"status": "ok"}), 200
+        except Exception as e:
+            # Dedup failure should not block processing — log and continue
+            print(f"WARNING: Dedup check failed for update_id={update_id}: {e}")
 
     # 3. Extract chat_id from the update
     chat_id = _extract_chat_id(update)
@@ -309,7 +323,7 @@ def _handle_cancel(chat_id: int, user_id: str):
 
 
 def _handle_meal_selection(
-    chat_id: int, user_id: str, session_id: str, choice: str, callback_id: str = None
+    chat_id: int, user_id: str, session_id: str, choice: str, callback_id: str | None = None
 ):
     """Handle a meal selection from an inline keyboard button tap."""
     print(f"Meal selection: user={user_id}, session={session_id}, choice={choice}")
@@ -409,8 +423,14 @@ def _handle_meal_selection(
     db_service.append_to_conversation(user_id, "assistant", confirmation_msg, metadata=selection_metadata)
     telegram_service.send_message(chat_id, confirmation_msg)
 
-    # 9. Trigger grocery list generation (Phase 5 wiring)
-    _generate_and_send_grocery_list(chat_id, user_id, recipe_name, ingredients)
+    # 9. Trigger grocery list generation in background thread
+    #    so the webhook can return 200 to Telegram immediately
+    threading.Thread(
+        target=_generate_and_send_grocery_list,
+        args=(chat_id, user_id, recipe_name, ingredients),
+        kwargs={"session_id": session_id},
+        daemon=False,
+    ).start()
 
 
 def _handle_meal_selection_from_text(chat_id: int, user_id: str, selection: str):
@@ -459,7 +479,7 @@ def _handle_select_all_from_text(chat_id: int, user_id: str):
 
 
 def _handle_select_all(
-    chat_id: int, user_id: str, session_id: str, data: dict, callback_id: str = None
+    chat_id: int, user_id: str, session_id: str, data: dict, callback_id: str | None = None
 ):
     """Handle selecting all 3 recipes — save all to history, generate combined grocery list."""
     options = data.get("options", {})
@@ -468,8 +488,11 @@ def _handle_select_all(
     all_ingredients = []
 
     for key in ["1", "2", "3"]:
-        recipe = options[key]
-        recipe_name = recipe["name"]
+        recipe = options.get(key)
+        if not recipe:
+            print(f"WARNING: Missing option {key} in session {session_id}")
+            continue
+        recipe_name = recipe.get("name", f"Meal {key}")
         ingredients = recipe.get("ingredients", [])
         all_recipes.append(recipe_name)
         all_ingredients.append({"name": recipe_name, "ingredients": ingredients})
@@ -513,21 +536,35 @@ def _handle_select_all(
     db_service.append_to_conversation(user_id, "assistant", confirmation_msg, metadata=selection_metadata)
     telegram_service.send_message(chat_id, confirmation_msg)
 
-    # Generate combined grocery list
-    _generate_and_send_combined_grocery_list(chat_id, user_id, all_ingredients)
+    # Generate combined grocery list in background thread
+    threading.Thread(
+        target=_generate_and_send_combined_grocery_list,
+        args=(chat_id, user_id, all_ingredients),
+        kwargs={"session_id": session_id},
+        daemon=False,
+    ).start()
 
 
 def _generate_and_send_combined_grocery_list(
-    chat_id: int, user_id: str, recipes: list
+    chat_id: int, user_id: str, recipes: list, session_id: str | None = None,
 ):
-    """
-    Generate a combined grocery list for multiple recipes and send via Telegram.
+    """Generate a combined grocery list for multiple recipes and send via Telegram.
+
+    Caches the result in Firestore if session_id is provided.
     recipes: list of dicts with {"name": str, "ingredients": list}
     """
     try:
         grocery_text = llm_service.generate_combined_grocery_list(user_id, recipes)
         telegram_service.send_grocery_list(chat_id, grocery_text)
         print(f"Combined grocery list sent to chat {chat_id} for {len(recipes)} recipes")
+
+        # Cache the combined grocery list on the session
+        if session_id:
+            try:
+                db_service.cache_grocery_list(session_id, grocery_text)
+                print(f"Combined grocery list cached on session {session_id}")
+            except Exception as e:
+                print(f"WARNING: Failed to cache combined grocery list: {e}")
 
         # Set pending feedback for the last recipe
         try:
@@ -851,11 +888,70 @@ def _handle_generate_now(chat_id: int, user_id: str):
 
 
 def _handle_grocery_list(chat_id: int, user_id: str, text: str):
-    """Handle a grocery list request — find the most recent selected meal and regenerate the list."""
+    """Handle a grocery list request — check cache first, then regenerate if needed.
+
+    Fixes the bug where 'send me the shopping list' after selecting all 3
+    only returned the last single meal's list.
+    """
     grocery_meta = {"intent": "grocery_list"}
     db_service.append_to_conversation(user_id, "user", text, metadata=grocery_meta)
 
-    # 1. Check for the most recently selected meal in history
+    # 1. Check for a completed session with a cached grocery list
+    try:
+        session = db_service.get_most_recent_completed_session(user_id)
+    except Exception as e:
+        print(f"WARNING: Failed to get completed session: {e}")
+        session = None
+
+    if session:
+        data = session.to_dict()
+        cached_list = data.get("cached_grocery_list")
+
+        if cached_list:
+            # Serve from cache — no Gemini call needed
+            print(f"Serving cached grocery list from session {session.id}")
+            db_service.append_to_conversation(user_id, "assistant", cached_list, metadata=grocery_meta)
+            telegram_service.send_grocery_list(chat_id, cached_list)
+            return
+
+        # No cache — regenerate based on what was selected
+        selected = data.get("selected_option")
+        options = data.get("options", {})
+
+        if selected == "all":
+            # Multi-meal: regenerate combined list for all 3
+            all_ingredients = []
+            for key in ["1", "2", "3"]:
+                recipe = options.get(key, {})
+                all_ingredients.append({
+                    "name": recipe.get("name", f"Meal {key}"),
+                    "ingredients": recipe.get("ingredients", []),
+                })
+            names = [r["name"] for r in all_ingredients]
+            msg = f"Right, let me pull up the mega list for {', '.join(names)}..."
+            db_service.append_to_conversation(user_id, "assistant", msg, metadata=grocery_meta)
+            telegram_service.send_message(chat_id, msg)
+            _generate_and_send_combined_grocery_list(
+                chat_id, user_id, all_ingredients, session_id=session.id,
+            )
+            return
+
+        if selected and selected in options:
+            # Single meal: regenerate for the selected recipe
+            recipe = options[selected]
+            recipe_name = recipe.get("name", "")
+            ingredients = recipe.get("ingredients", [])
+
+            if recipe_name and ingredients:
+                msg = f"Right, let me pull up the list for {recipe_name}..."
+                db_service.append_to_conversation(user_id, "assistant", msg, metadata=grocery_meta)
+                telegram_service.send_message(chat_id, msg)
+                _generate_and_send_grocery_list(
+                    chat_id, user_id, recipe_name, ingredients, session_id=session.id,
+                )
+                return
+
+    # 2. Fallback: check meal history (handles older sessions without cache)
     try:
         recent_meals = db_service.get_recent_meals(user_id, limit=1)
     except Exception:
@@ -873,15 +969,15 @@ def _handle_grocery_list(chat_id: int, user_id: str, text: str):
             _generate_and_send_grocery_list(chat_id, user_id, recipe_name, ingredients)
             return
 
-    # 2. Check for a pending session — user might want to pick first
-    session = db_service.get_pending_session(user_id)
-    if session:
+    # 3. Check for a pending session — user might want to pick first
+    pending = db_service.get_pending_session(user_id)
+    if pending:
         msg = "You've got meal options waiting! Pick one (1, 2, or 3) and I'll sort the shopping list for you."
         db_service.append_to_conversation(user_id, "assistant", msg, metadata=grocery_meta)
         telegram_service.send_message(chat_id, msg)
         return
 
-    # 3. No meal to generate a list for
+    # 4. No meal to generate a list for
     msg = "No meals to make a list for yet, love. Say 'plan dinner' and let's get you sorted."
     db_service.append_to_conversation(user_id, "assistant", msg, metadata=grocery_meta)
     telegram_service.send_message(chat_id, msg)
@@ -944,16 +1040,26 @@ def _handle_recipe_detail(chat_id: int, user_id: str, text: str):
 
 
 def _generate_and_send_grocery_list(
-    chat_id: int, user_id: str, recipe_name: str, ingredients: list
+    chat_id: int, user_id: str, recipe_name: str, ingredients: list,
+    session_id: str | None = None,
 ):
-    """
-    Generate a grocery list for the selected recipe and send it via Telegram.
-    Sets pending_feedback so Gordon asks about the meal on next interaction.
+    """Generate a grocery list for the selected recipe and send via Telegram.
+
+    Caches the result in Firestore if session_id is provided, so subsequent
+    'send me the shopping list' requests can serve from cache.
     """
     try:
         grocery_text = llm_service.generate_grocery_list(user_id, recipe_name, ingredients)
         telegram_service.send_grocery_list(chat_id, grocery_text)
         print(f"Grocery list sent to chat {chat_id} for '{recipe_name}'")
+
+        # Cache the grocery list on the session for future re-requests
+        if session_id:
+            try:
+                db_service.cache_grocery_list(session_id, grocery_text)
+                print(f"Grocery list cached on session {session_id}")
+            except Exception as e:
+                print(f"WARNING: Failed to cache grocery list: {e}")
 
         # Set pending feedback so Gordon asks "How did that turn out?" next time
         try:
